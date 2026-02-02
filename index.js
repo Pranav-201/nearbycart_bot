@@ -179,67 +179,54 @@ async function main() {
     return bot.sendMessage(chatId, text);
   });
 
+  // ✅ /search (supports multi-word queries) + FULL SHOP DETAILS
   bot.onText(/^\/search(?:\s+(.+))?$/i, async (msg, match) => {
-  const chatId = msg.chat.id;
+    const chatId = msg.chat.id;
 
-  try {
-    const userQuery = (match?.[1] || "").trim();
-    if (!userQuery) {
-      return bot.sendMessage(chatId, "Use: /search <product>\nExample: /search cetaphil");
-    }
+    try {
+      const userQuery = (match?.[1] || "").trim();
 
-    const safeQuery = escapeRegex(userQuery);
+      if (!userQuery) {
+        return bot.sendMessage(chatId, "Use: /search <product>\nExample: /search cetaphil");
+      }
 
-    const products = await Product.find({
-      name: { $regex: safeQuery, $options: "i" },
-    })
-      .populate({
-        path: "shop",
-        select: "shopName category address openingTime",
-        populate: {
-          path: "shopkeeper",
-          select: "name phone", // ⚠️ must exist in Shopkeeper schema
-        },
+      const safeQuery = escapeRegex(userQuery);
+
+      // ✅ Populate shop details
+      const products = await Product.find({
+        name: { $regex: safeQuery, $options: "i" },
       })
-      .limit(10)
-      .lean();
+        .populate("shop", "shopName ownerName phone address")
+        .sort({ updatedAt: -1 })
+        .limit(10)
+        .lean();
 
-    if (!products.length) {
-      return bot.sendMessage(chatId, `No matches found for: ${userQuery}`);
+      if (!products.length) {
+        return bot.sendMessage(chatId, `No matches found for: ${userQuery}`);
+      }
+
+      // Telegram Markdown can break if data contains _ or *
+      // So we escape user query + (light) escape each message chunk
+      const header = `✅ Results for: "${escapeMarkdown(userQuery)}"\n\n`;
+      const body = products
+        .map((p, idx) => escapeMarkdown(formatResultLine(p, idx)))
+        .join("\n");
+
+      const footer = "\n🔎 For more details, open website:";
+
+      const reply = header + body + footer;
+
+      return bot.sendMessage(chatId, reply, {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "🌐 Open NearbyCart", url: WEBSITE_URL }]],
+        },
+      });
+    } catch (err) {
+      console.error("❌ Search error full:", err);
+      return bot.sendMessage(chatId, "Error searching product ❌");
     }
-
-    let message = `✅ Results for: "${userQuery}"\n\n`;
-
-    products.forEach((p, i) => {
-      const shop = p.shop || {};
-      const keeper = shop.shopkeeper || {};
-
-      message +=
-        `*${i + 1}. ${p.name}*\n` +
-        `💰 Price: ₹${p.price}\n` +
-        `📦 Quantity: ${p.quantity}\n\n` +
-        `🏪 Shop: ${shop.shopName || "-"}\n` +
-        `📂 Category: ${shop.category || "-"}\n` +
-        `📍 Address: ${shop.address || "-"}\n` +
-        `⏰ Opens: ${shop.openingTime || "-"}\n\n` +
-        `👤 Owner: ${keeper.name || "-"}\n` +
-        `📞 Contact: ${keeper.phone || "-"}\n\n`;
-    });
-
-    return bot.sendMessage(chatId, message, {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🌐 Open NearbyCart", url: WEBSITE_URL }],
-        ],
-      },
-    });
-  } catch (err) {
-    console.error("❌ Search error:", err);
-    return bot.sendMessage(chatId, "Error searching product ❌");
-  }
-});
-
+  });
 
   // Optional: handle normal texts (when user doesn't type /search)
   bot.on("message", async (msg) => {
