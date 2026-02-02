@@ -1,10 +1,11 @@
 /**
- * index.js (FINAL UPDATED)
+ * index.js (FINAL FIXED)
  * Telegram Bot + MongoDB product search (polling)
  *
- * ✅ Now includes FULL SHOP DETAILS in /search results:
+ * ✅ Shows FULL DETAILS:
  * - Product: name, price, quantity
- * - Shop: shopName, ownerName, phone, address
+ * - Shop: shopName, category, address, openingTime
+ * - Shopkeeper: name, phone (or mobile/contactNumber)
  * - Website button
  *
  * ENV required:
@@ -45,24 +46,45 @@ async function connectDB() {
 }
 
 // -------------------- MODELS --------------------
-// NOTE: Ideally import your existing models from your backend repo.
-// For bot-only repo, schemas are defined here.
-
-// Shop schema (for populate)
-// ⚠️ If your actual Shop fields are different, update these field names to match your DB.
-const shopSchema = new mongoose.Schema(
+// ✅ Minimal Shopkeeper schema (adjust keys to match your real Shopkeeper model)
+const shopkeeperSchema = new mongoose.Schema(
   {
-    shopName: { type: String, default: "" },
-    ownerName: { type: String, default: "" },
-    phone: { type: String, default: "" }, // or contactNumber/mobile in your DB
-    address: { type: String, default: "" },
+    // change these if your Shopkeeper schema uses different names
+    name: { type: String, default: "" },
+    phone: { type: String, default: "" },
+    mobile: { type: String, default: "" },
+    contactNumber: { type: String, default: "" },
   },
   { timestamps: true }
 );
+const Shopkeeper =
+  mongoose.models.Shopkeeper || mongoose.model("Shopkeeper", shopkeeperSchema);
+
+// ✅ Your real Shop schema (same structure as backend)
+const shopSchema = new mongoose.Schema(
+  {
+    shopkeeper: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Shopkeeper",
+      required: true,
+      unique: true,
+    },
+    shopName: { type: String, required: true },
+    category: { type: String, required: true },
+    address: { type: String, required: true },
+    location: {
+      type: { type: String, enum: ["Point"], default: "Point" },
+      coordinates: { type: [Number], required: true },
+    },
+    openingTime: { type: String },
+  },
+  { timestamps: true }
+);
+shopSchema.index({ location: "2dsphere" });
 
 const Shop = mongoose.models.Shop || mongoose.model("Shop", shopSchema);
 
-// Product schema
+// ✅ Product schema
 const productSchema = new mongoose.Schema(
   {
     shop: { type: mongoose.Schema.Types.ObjectId, ref: "Shop" },
@@ -92,39 +114,52 @@ function safeNumber(v, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function escapeMarkdown(text) {
+  // Telegram Markdown (not V2)
+  return String(text).replace(/([_*`[\]])/g, "\\$1");
+}
+
+function getKeeperName(keeper) {
+  return safeText(keeper?.name || keeper?.fullName || keeper?.ownerName, "-");
+}
+
+function getKeeperPhone(keeper) {
+  return safeText(keeper?.phone || keeper?.mobile || keeper?.contactNumber, "-");
+}
+
 function formatResultLine(p, idx) {
   const shop = p.shop || {};
+  const keeper = shop.shopkeeper || {};
+
   const productName = safeText(p.name);
   const price = safeNumber(p.price, 0);
   const qty = safeNumber(p.quantity, 0);
 
   const shopName = safeText(shop.shopName);
-  const ownerName = safeText(shop.ownerName);
-  const phone = safeText(shop.phone);
+  const category = safeText(shop.category);
   const address = safeText(shop.address);
+  const openingTime = safeText(shop.openingTime);
+
+  const ownerName = getKeeperName(keeper);
+  const phone = getKeeperPhone(keeper);
 
   return (
-    `*${idx + 1}.* *${productName}*\n` +
+    `*${idx + 1}.* *${escapeMarkdown(productName)}*\n` +
     `💰 Price: ₹${price}\n` +
-    `📦 Qty: ${qty}\n` +
-    `🏪 Shop: ${shopName}\n` +
-    `👤 Owner: ${ownerName}\n` +
-    `📞 Contact: ${phone}\n` +
-    `📍 Address: ${address}\n`
+    `📦 Qty: ${qty}\n\n` +
+    `🏪 Shop: ${escapeMarkdown(shopName)}\n` +
+    `📂 Category: ${escapeMarkdown(category)}\n` +
+    `📍 Address: ${escapeMarkdown(address)}\n` +
+    `⏰ Opens: ${escapeMarkdown(openingTime)}\n` +
+    `👤 Owner: ${escapeMarkdown(ownerName)}\n` +
+    `📞 Contact: ${escapeMarkdown(phone)}\n`
   );
-}
-
-function escapeMarkdown(text) {
-  // Minimal escaping for Telegram Markdown (not MarkdownV2)
-  // Avoids breaking on underscores and asterisks in names/addresses
-  return String(text).replace(/([_*`[\]])/g, "\\$1");
 }
 
 // -------------------- BOT START --------------------
 async function main() {
   await connectDB();
 
-  // ✅ Start polling (ONLY ONE instance should run!)
   const bot = new TelegramBot(BOT_TOKEN, {
     polling: {
       interval: 300,
@@ -135,7 +170,6 @@ async function main() {
 
   console.log("🤖 Bot started (polling)");
 
-  // -------------------- POLLING ERROR HANDLER --------------------
   bot.on("polling_error", (err) => {
     const msg = err?.message || "";
     console.error("❌ polling_error:", msg);
@@ -152,7 +186,7 @@ async function main() {
     }
   });
 
-  // -------------------- COMMANDS --------------------
+  // /start
   bot.onText(/^\/start$/, async (msg) => {
     const chatId = msg.chat.id;
 
@@ -168,35 +202,41 @@ async function main() {
     });
   });
 
+  // /help
   bot.onText(/^\/help$/, async (msg) => {
     const chatId = msg.chat.id;
     const text =
       "🧾 Commands:\n" +
       "• /search <product-name>\n" +
       "  Example: /search cetaphil\n\n" +
-      "You will get product + shop details.\n" +
-      "Tip: Use simple keywords (brand/item name).";
+      "You will get product + shop + owner details.";
     return bot.sendMessage(chatId, text);
   });
 
-  // ✅ /search (supports multi-word queries) + FULL SHOP DETAILS
+  // /search
   bot.onText(/^\/search(?:\s+(.+))?$/i, async (msg, match) => {
     const chatId = msg.chat.id;
 
     try {
       const userQuery = (match?.[1] || "").trim();
-
       if (!userQuery) {
         return bot.sendMessage(chatId, "Use: /search <product>\nExample: /search cetaphil");
       }
 
       const safeQuery = escapeRegex(userQuery);
 
-      // ✅ Populate shop details
       const products = await Product.find({
         name: { $regex: safeQuery, $options: "i" },
       })
-        .populate("shop", "shopName ownerName phone address")
+        .populate({
+          path: "shop",
+          select: "shopName category address openingTime shopkeeper",
+          populate: {
+            path: "shopkeeper",
+            // ✅ Adjust if your Shopkeeper uses different field names
+            select: "name phone mobile contactNumber fullName ownerName",
+          },
+        })
         .sort({ updatedAt: -1 })
         .limit(10)
         .lean();
@@ -205,41 +245,32 @@ async function main() {
         return bot.sendMessage(chatId, `No matches found for: ${userQuery}`);
       }
 
-      // Telegram Markdown can break if data contains _ or *
-      // So we escape user query + (light) escape each message chunk
       const header = `✅ Results for: "${escapeMarkdown(userQuery)}"\n\n`;
-      const body = products
-        .map((p, idx) => escapeMarkdown(formatResultLine(p, idx)))
-        .join("\n");
+      const body = products.map((p, idx) => formatResultLine(p, idx)).join("\n");
+      const footer = "\n🔎 For full details, open website:";
 
-      const footer = "\n🔎 For more details, open website:";
-
-      const reply = header + body + footer;
-
-      return bot.sendMessage(chatId, reply, {
+      return bot.sendMessage(chatId, header + body + footer, {
         parse_mode: "Markdown",
         reply_markup: {
           inline_keyboard: [[{ text: "🌐 Open NearbyCart", url: WEBSITE_URL }]],
         },
       });
     } catch (err) {
-      console.error("❌ Search error full:", err);
+      console.error("❌ Search error:", err);
       return bot.sendMessage(chatId, "Error searching product ❌");
     }
   });
 
-  // Optional: handle normal texts (when user doesn't type /search)
+  // normal text → hint
   bot.on("message", async (msg) => {
     const chatId = msg.chat.id;
     const text = (msg.text || "").trim();
 
-    // ignore commands (handled above)
     if (!text || text.startsWith("/")) return;
-
     return bot.sendMessage(chatId, `Type: /search ${text}`);
   });
 
-  // -------------------- GRACEFUL SHUTDOWN --------------------
+  // graceful shutdown
   async function shutdown(signal) {
     console.log(`\n🛑 Received ${signal}. Shutting down...`);
     try {
