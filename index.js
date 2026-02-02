@@ -22,7 +22,7 @@ const mongoose = require("mongoose");
 // -------------------- CONFIG --------------------
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const MONGO_URI = process.env.MONGO_URI;
-const WEBSITE_URL = process.env.WEBSITE_URL || "https://nearbycart.in";
+const WEBSITE_URL = process.env.WEBSITE_URL || "https://nearbycart-1p45.vercel.app?_vercel_share=rAWzzdIGwIGJGRDCWGYy1SKGNb1VodKO";
 
 if (!BOT_TOKEN) {
   console.error("❌ BOT_TOKEN missing in .env");
