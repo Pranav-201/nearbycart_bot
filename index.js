@@ -2,7 +2,7 @@
  * index.js (FINAL FIXED)
  * Telegram Bot + MongoDB product search (polling)
  *
- * ✅ Shows FULL DETAILS:
+ * Shows FULL DETAILS:
  * - Product: name, price, quantity
  * - Shop: shopName, category, address, openingTime
  * - Shopkeeper: name, phone (or mobile/contactNumber)
@@ -23,7 +23,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const MONGO_URI = process.env.MONGO_URI;
 const WEBSITE_URL =
   process.env.WEBSITE_URL ||
-  "https://nearbycart-1p45.vercel.app?_vercel_share=rAWzzdIGwIGJGRDCWGYy1SKGNb1VodKO";
+  "https://nearbycart-in.vercel.app/";
 
 if (!BOT_TOKEN) {
   console.error("❌ BOT_TOKEN missing in .env");
